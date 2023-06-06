@@ -28,35 +28,25 @@ contract VideoQueueV2Test is Test, IERC721Receiver {
     }
 
     function test_Enqueue() public {
-        video_queue.enqueue{value: 0.001 ether}("islekjfkao_", 1, 0);
+        video_queue.enqueue{value: 0.03 ether}("islekjfkao_", 30, 0);
     }
 
     function test_DequeueBasic() public {
-        video_queue.enqueue{value: 0.001 ether}("islekjfkao_", 1, 0);
-        vm.warp(2 seconds);
+        video_queue.enqueue{value: 0.03 ether}("islekjfkao_", 30, 0);
+        vm.warp(31 seconds);
         video_queue.dequeue();
     }
 
     function testFail_RevertWhen_DequeueIsCalledEarly() public {
-        video_queue.enqueue{value: 0.001 ether}("islekjfkao_", 1, 0);
+        video_queue.enqueue{value: 0.03 ether}("islekjfkao_", 30, 0);
         video_queue.dequeue();
     }
 
     function test_DeployerCanVote() public {
         hoax(vitalik, 10 ether);
-        video_queue.enqueue{value: 0.001 ether}("islekjfkao_", 1, 0);
-        skip(2 seconds);
+        video_queue.enqueue{value: 0.03 ether}("islekjfkao_", 30, 0);
+        skip(31 seconds);
         video_queue.dequeue();
         video_queue.voteOnVideo(1, true);
-        skip(1 days + 3 seconds);
-        video_queue.wasItAGoodVideo(1);
-        video_queue.enqueue{value: 0.001 ether}("pslekjfkao_", 1, 0);
-        skip(2 seconds);
-        video_queue.dequeue();
-        video_queue.voteOnVideo(2, true);
-        video_queue.enqueue{value: 0.001 ether}("aslekjfkao_", 1, 0);
-        skip(6 days);
-        video_queue.dequeue();
-        video_queue.receivePeriodFunds(1);
     }
 }

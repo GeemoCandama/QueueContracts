@@ -48,7 +48,7 @@ contract VideoQueueV2 is ERC721 {
     mapping(uint256 => ReleasePeriod) public releasePeriodInfo;
 
     uint256 public currentVideoStartTime;
-    uint256 public costPerSecond;
+    uint256 public immutable costPerSecond;
     uint256 maxRefund = 0.0005 ether;
     uint256 effectiveBalance;
 
@@ -84,7 +84,7 @@ contract VideoQueueV2 is ERC721 {
     }
 
     function enqueue(string memory videoId, uint256 minTime, uint256 playbackStartTime) external payable validVideoId(videoId) {
-        require(minTime > 0, "minTime must be greater than 0");
+        require(minTime >= 30, "minTime must be greater than 30");
         uint256 requiredPayment = minTime * costPerSecond;
         require(msg.value >= requiredPayment, "Insufficient payment");
 
@@ -95,10 +95,11 @@ contract VideoQueueV2 is ERC721 {
         });
 
         _tokenIds.increment();
-        _safeMint(msg.sender, _tokenIds.current()); 
-        videoDetails[_tokenIds.current()] = newVideo;
+        uint256 tokenId = _tokenIds.current();
+        _safeMint(msg.sender, tokenId); 
+        videoDetails[tokenId] = newVideo;
 
-        if (_currentVideoTokenId.current() == _tokenIds.current()) {
+        if (_currentVideoTokenId.current() == tokenId) {
             currentVideoStartTime = block.timestamp;
             emit VideoBecameFirstInQueue(newVideo, currentVideoStartTime);
         }
