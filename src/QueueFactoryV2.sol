@@ -1,5 +1,5 @@
 pragma solidity >=0.8.0 <0.9.0;
-import "./SpotifyQueue.sol";
+import "./YoutubeQueueNew.sol";
 import "openzeppelin-contracts/utils/Counters.sol";
 
 contract QueueFactory {
@@ -19,10 +19,10 @@ contract QueueFactory {
         address _voteFundDonationAddress,
         address _initialVoter,
         uint256 _initialVoteInfluence,
-        uint256 _maxRefund
+        uint256 _influencePerToken
     );
 
-    function createSpotifyQueue(
+    function createYoutubeQueue(
         string memory _name,
         string memory _symbol,
         string memory _queueURI,
@@ -33,9 +33,9 @@ contract QueueFactory {
         address _voteFundDonationAddress,
         address _initialVoter,
         uint256 _initialVoteInfluence,
-        uint256 _maxRefund
+        uint256 _influencePerToken
     ) public {
-        Queue queue = new SpotifyQueue(
+        YoutubeQueueNew queue = new YoutubeQueueNew (
             _name,
             _symbol,
             _queueURI,
@@ -46,7 +46,7 @@ contract QueueFactory {
             _voteFundDonationAddress,
             _initialVoter,
             _initialVoteInfluence,
-            _maxRefund
+            _influencePerToken
         );
         emit QueueCreated(
             address(queue), 
@@ -61,7 +61,7 @@ contract QueueFactory {
             _voteFundDonationAddress,
             _initialVoter,
             _initialVoteInfluence,
-            _maxRefund
+            _influencePerToken
         );
         queueIdCounter.increment();
     }

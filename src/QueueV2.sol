@@ -7,13 +7,15 @@ import "openzeppelin-contracts/utils/Counters.sol";
  * @title A Contract for queues with spots in the queue being NFTs.
  * @dev This contract uses OpenZeppelin's ERC721 implementation.
  */
-abstract contract Queue is ERC721 {
+abstract contract QueueV2 is ERC721 {
     using Counters for Counters.Counter;
 
     struct TokenDetails {
         string identifier;
         uint256 timeActive;
         uint256 playerStartTime;
+        uint256 startTime;
+        uint256 releasePeriod;
     }
 
     struct Offer {
@@ -23,10 +25,8 @@ abstract contract Queue is ERC721 {
     }
 
     struct VotePeriod {
-        uint256 endTimeStamp;
         uint256 good;
         uint256 bad;
-        uint256 tokensReleasePeriod;
         mapping(address => bool) hasVoted;
     }
 
@@ -36,17 +36,12 @@ abstract contract Queue is ERC721 {
      * because of the costPerSecond variable.
      */
     struct ReleasePeriod {
-        uint256 startTimestamp;
         uint256 rewards;
         uint256 totalVotesCasted;
         mapping(address => uint256) numVotesCastedThisPeriod;
         mapping(address => bool) hasReceivedShare;
+        uint256 endTimeStamp;
     }
-
-    struct VoteData {       
-        uint256 good;
-        uint256 bad;
-    }    
 
     /**
      * @dev We use the isForSale boolean to support zero cost listings.
@@ -55,6 +50,11 @@ abstract contract Queue is ERC721 {
         bool isForSale;
         uint256 price;
     }
+
+    struct VoteData {       
+        uint256 good;
+        uint256 bad;
+    }    
 
     /**
      * @dev Map from token id to token details.
@@ -91,11 +91,7 @@ abstract contract Queue is ERC721 {
      */
     mapping(address => VoteData) public allVotes;
 
-    uint256 public activeTokenStartTime;
-
     Counters.Counter public tokenCounter;
-    Counters.Counter public activeTokenCounter;
-    Counters.Counter public activeReleasePeriodCounter;
     Counters.Counter public offerCounter;
 
     // MetaData: queueURI is the uri associated with every token in the queue
@@ -103,17 +99,15 @@ abstract contract Queue is ERC721 {
     uint256 public immutable votePeriodLength;
     uint256 public immutable releasePeriodLength;
     uint256 public immutable costPerSecond;
-    uint256 public immutable maxRefund;
     uint256 public immutable minTimeActive;
+    uint256 public immutable influencePerVotingToken;
 
     address immutable voteFundDonationAddress;
     uint256 donationAddressFunds;
 
     uint256 private previousReleasePeriodEndTimeStamp;
 
-    event TokenEnqueued(string identifier, uint256 timeActive, uint256 playerStartTime, uint256 indexed tokenId);
-    event NewActiveToken(string identifier, uint256 timeActive, uint256 playerStartTime, uint256 indexed tokenId, uint256 timestamp);
-    event ActiveTokenDequeued(uint256 indexed tokenId, uint256 indexed endTimeStamp, uint256 indexed releasePeriod);
+    event TokenEnqueued(string identifier, uint256 timeActive, uint256 playerStartTime, uint256 startTime, uint256 block_timestamp, uint256 releasePeriod, uint256 indexed tokenId);
     event TokenDetailsUpdated(string identifier, uint256 playerStartTime, uint256 indexed tokenId);
     event NewListing(uint256 indexed tokenId, Listing listing);
     event NewOffer(uint256 indexed price, address indexed offerer, uint256 indexed tokenId);
@@ -130,7 +124,6 @@ abstract contract Queue is ERC721 {
      * @param _releasePeriodLength The amount of time between release periods.
      * @param _voteFundDonationAddress address to donate to.
      * @param _initialVoteInfluence The amount of votes that the initialVoter will have when deployed.
-     * @param _maxRefund The largest gas refund provided during a call to dequeue. This parameter will greatly influence the 
      * the amount of ether availabe for voting rewards. I'd recommend setting it somewhere between 1/10 and 1/100 of the cost to
      * queue the shortest token possible. Note that the actual gas cost of the dequeue function is not influenced by these parameters.
      * You can think of setting this value at 1/100 of the shortest token possible as 1% of enqueue fees going to gas refunds.
@@ -146,28 +139,20 @@ abstract contract Queue is ERC721 {
         address _voteFundDonationAddress,
         address _initialVoter,
         uint256 _initialVoteInfluence,
-        uint256 _maxRefund
+        uint256 _influencePerVotingToken
     ) ERC721(_name, _symbol) {
-        require(_releasePeriodLength > _votePeriodLength, "Release period length must be greater than vote period length");
         require(_initialVoteInfluence > 0, "The initial vote influence of the initialVoter must be positive");
         require(_initialVoter != address(0), "initialVoter address cannot be 0");
-        require(_maxRefund < _costPerSecond * _minTimeActive, "max refund must be sustainable via enqueue");
         queueURI = _queueURI;  
         minTimeActive = _minTimeActive;
         costPerSecond = _costPerSecond;
-
-        maxRefund = _maxRefund;
-        // We increment this at the start so there is no token of this value
-        activeTokenCounter.increment();
-        activeReleasePeriodCounter.increment();
-        releasePeriodInfo[1].startTimestamp = block.timestamp;
+        influencePerVotingToken = _influencePerVotingToken;
 
         votePeriodLength = _votePeriodLength;
         releasePeriodLength = _releasePeriodLength;
 
         voteFundDonationAddress = _voteFundDonationAddress;
         voteInfluenceBalance[_initialVoter] = _initialVoteInfluence;
-        queueURI = _queueURI;
     }
 
     modifier validIdentifier(string memory _identifier) virtual;
@@ -176,90 +161,36 @@ abstract contract Queue is ERC721 {
         require(_timeActive >= minTimeActive, "_timeActive must be greater than minTimeActive");
         uint256 requiredPayment = _timeActive * costPerSecond;
         require(msg.value >= requiredPayment, "Insufficient payment");
+        uint256 startTime;
+        if (tokenCounter.current() == 0) {
+           startTime = block.timestamp; 
+        } else {
+            TokenDetails memory previousTokenDetails = tokenDetails[tokenCounter.current()];
+            if (previousTokenDetails.startTime + previousTokenDetails.timeActive < block.timestamp) {
+                startTime = block.timestamp;
+            } else {
+                startTime = previousTokenDetails.startTime + previousTokenDetails.timeActive + 1;
+            }
+        }
 
         TokenDetails memory newTokenDetails = TokenDetails ({
             identifier: _identifier,
             timeActive: _timeActive,
-            playerStartTime: _playerStartTime
+            playerStartTime: _playerStartTime,
+            startTime: startTime,
+            releasePeriod: tokenCounter.current() / releasePeriodLength
         });
+        if ((tokenCounter.current() + 1) % releasePeriodLength == 0 && tokenCounter.current() != 0) {
+            releasePeriodInfo[(tokenCounter.current() / releasePeriodLength)].endTimeStamp = startTime + _timeActive + votePeriodLength;
+        }
 
         tokenCounter.increment();
         uint256 newTokenId = tokenCounter.current();
         _safeMint(msg.sender, newTokenId); 
         tokenDetails[newTokenId] = newTokenDetails;
-        emit TokenEnqueued(_identifier, _timeActive, _playerStartTime, newTokenId);
+        emit TokenEnqueued(_identifier, _timeActive, _playerStartTime, startTime, block.timestamp, newTokenDetails.releasePeriod, newTokenId);
 
-        if (activeTokenCounter.current() == tokenCounter.current()) {
-            activeTokenStartTime = block.timestamp;
-            emit NewActiveToken(_identifier, _timeActive, _playerStartTime, newTokenId, block.timestamp);
-        }
-        releasePeriodInfo[activeReleasePeriodCounter.current()].rewards += msg.value;
-    }
-
-    /**
-     * @dev Increment activeTokenCounter if the activeToken's timeActive has passed.
-     * This function acts as the timekeeper of the contract. It updates the releasePeriod and active token up.
-     * ~Security~ This function refunds the gas used on this function internal/external transaction.
-     */
-    function dequeue() external {
-        uint256 startGas = gasleft();
-        uint256 activeTokenId = activeTokenCounter.current();
-        uint256 totalTokens = tokenCounter.current();
-        require(activeTokenId <= totalTokens, "No tokens in the queue");
-
-        TokenDetails memory activeToken = tokenDetails[activeTokenId];
-        uint256 elapsedTime = block.timestamp - activeTokenStartTime;
-
-        require(elapsedTime >= activeToken.timeActive, "active time not reached");
-        uint256 activeReleasePeriodPriorToPotentialUpdate = activeReleasePeriodCounter.current();
-
-        voting[activeTokenId].endTimeStamp = block.timestamp + votePeriodLength;
-        voting[activeTokenId].tokensReleasePeriod = activeReleasePeriodPriorToPotentialUpdate;
-        emit ActiveTokenDequeued(activeTokenId, block.timestamp + votePeriodLength, activeReleasePeriodPriorToPotentialUpdate);
-        uint256 activeReleasePeriodTimestamp = releasePeriodInfo[activeReleasePeriodPriorToPotentialUpdate].startTimestamp;
-
-        if (block.timestamp >= activeReleasePeriodTimestamp + releasePeriodLength) {
-            uint256 queuedGasCosts;
-            if (activeTokenCounter.current() > totalTokens) {
-                queuedGasCosts = 0;
-            } else {
-                queuedGasCosts = (totalTokens - activeTokenId) * maxRefund;
-            }
-
-            releasePeriodInfo[activeReleasePeriodPriorToPotentialUpdate].rewards -= queuedGasCosts;
-            activeReleasePeriodCounter.increment();
-            releasePeriodInfo[activeReleasePeriodPriorToPotentialUpdate + 1].startTimestamp = block.timestamp;
-        }
-
-        activeTokenCounter.increment();
-        uint256 newActiveTokenId = activeTokenCounter.current();
-
-        if (newActiveTokenId <= totalTokens) {
-            activeTokenStartTime = block.timestamp;
-            TokenDetails memory newTokenDetails = tokenDetails[newActiveTokenId];
-            emit NewActiveToken(newTokenDetails.identifier, newTokenDetails.timeActive, newTokenDetails.playerStartTime, newActiveTokenId, block.timestamp);
-        } else {
-            activeTokenStartTime = 0;
-            emit NewActiveToken("", 0, 0, 0, 0);
-        }
-
-        uint256 gasSpent = startGas - gasleft();
-        if (maxRefund > 0) {
-            uint256 gasCost = tx.gasprice * (gasSpent + 2300);
-            if (gasCost > maxRefund) {
-                gasCost = maxRefund;
-                if (gasCost > address(this).balance) {
-                    payable(msg.sender).transfer(address(this).balance);
-                } else {
-                    payable(msg.sender).transfer(gasCost);
-                }
-            }
-        }
-    }
-
-    function getActiveTokenDetails() external view returns (TokenDetails memory) {
-        require(activeTokenCounter.current() <= tokenCounter.current(), "There are no tokens in queue");
-        return tokenDetails[activeTokenCounter.current()];
+        releasePeriodInfo[newTokenDetails.releasePeriod].rewards += msg.value;
     }
 
     function getTokenDetails(uint256 _tokenId) public view returns (TokenDetails memory) {
@@ -269,13 +200,15 @@ abstract contract Queue is ERC721 {
 
     function changeTokenDetails(string memory _identifier, uint256 _playerStartTime, uint256 _tokenId) external validIdentifier(_identifier) {
         require(_exists(_tokenId), "Token does not exist");
-        require(_tokenId > activeTokenCounter.current(), "Spot details are unalterable once active");
+        require(block.timestamp < tokenDetails[_tokenId].startTime, "Token details are unalterable once active");
         require(ownerOf(_tokenId) == msg.sender, "Only the owner can change token details");
 
         TokenDetails memory newTokenDetails = TokenDetails ({
             identifier: _identifier,
             timeActive: tokenDetails[_tokenId].timeActive,
-            playerStartTime: _playerStartTime
+            playerStartTime: _playerStartTime,
+            startTime: tokenDetails[_tokenId].startTime,
+            releasePeriod: tokenDetails[_tokenId].releasePeriod
         });
 
         tokenDetails[_tokenId] = newTokenDetails;
@@ -283,13 +216,13 @@ abstract contract Queue is ERC721 {
     }
 
     function safeTransferFrom(address _from, address _to, uint256 _tokenId, bytes memory _data) public override {
-        require(_tokenId > activeTokenCounter.current(), "Cannot transfer token once active");
+        require(block.timestamp < tokenDetails[_tokenId].startTime, "Cannot transfer token once active");
         super.safeTransferFrom(_from, _to, _tokenId, _data);
         delete listings[_tokenId];
     }
 
     function transferFrom(address _from, address _to, uint256 _tokenId) public override {
-        require(_tokenId > activeTokenCounter.current(), "Cannot transfer token once active");
+        require(block.timestamp < tokenDetails[_tokenId].startTime, "Cannot transfer token once active");
         super.transferFrom(_from, _to, _tokenId);
         delete listings[_tokenId];
     }
@@ -298,7 +231,7 @@ abstract contract Queue is ERC721 {
     //--------------------OFFER/LIST FUNCTIONS----------------------
 
     function listToken(uint256 _tokenId, uint256 _price) public {
-        require(_tokenId > activeTokenCounter.current(), "Cannot list token once active");
+        require(block.timestamp < tokenDetails[_tokenId].startTime, "Cannot list token once active");
         approve(address(this), _tokenId);
         Listing memory listing =  Listing ({
             isForSale: true,
@@ -309,7 +242,7 @@ abstract contract Queue is ERC721 {
     }
 
     function buyListedQueueToken(uint256 _tokenId) public payable {
-        require(_tokenId > activeTokenCounter.current(), "Cannot transfer token once active");
+        require(block.timestamp < tokenDetails[_tokenId].startTime, "Cannot transfer token once active");
         Listing memory listing = listings[_tokenId];
         require(listing.isForSale == true, "This token is not for sale");
         require(msg.value >= listing.price, "Insufficient payment!");
@@ -323,7 +256,7 @@ abstract contract Queue is ERC721 {
     }
 
     function offer(uint256 _tokenId) public payable {
-        require(_tokenId > activeTokenCounter.current(), "Cannot make an offer on a token once active");
+        require(block.timestamp < tokenDetails[_tokenId].startTime, "Cannot make an offer on a token once active");
         require(msg.value > 0, "0 offers arent allowed");
         Offer memory newOffer = Offer ({
            price: msg.value,
@@ -344,7 +277,7 @@ abstract contract Queue is ERC721 {
 
     function acceptOffer(uint256 _offerId) public { 
         Offer memory offerToAccept = offers[_offerId];
-        require(offerToAccept.tokenId > activeTokenCounter.current(), "Cannot accept offers once token is active");
+        require(block.timestamp < tokenDetails[offerToAccept.tokenId].startTime, "Cannot make an offer on a token once active");
         require(msg.sender == ownerOf(offerToAccept.tokenId), "You must be the owner to accept the offer");
         
         (bool success, ) = payable(msg.sender).call{value: offerToAccept.price}("");
@@ -361,11 +294,11 @@ abstract contract Queue is ERC721 {
     
     function voteOnToken(uint256 _tokenId, bool _wasGoodIdentifier) public {
         require(_exists(_tokenId), "Token does not exist");
-        require(voting[_tokenId].endTimeStamp > 0, "Voting has not started on this token");
-        require(block.timestamp <= voting[_tokenId].endTimeStamp, "Voting period is over");
+        uint256 endTimeStamp = tokenDetails[_tokenId].startTime + tokenDetails[_tokenId].timeActive;
+        require(block.timestamp > endTimeStamp, "Voting has not started on this token");
+        require(block.timestamp <= endTimeStamp + votePeriodLength, "Voting period is over");
         require(!voting[_tokenId].hasVoted[msg.sender], "You can only vote once");
-        uint256 voteInfluence = voteInfluenceBalance[msg.sender];
-        require(voteInfluence > 0, "You don't have any voting eligible tokens");
+        uint256 voteInfluence = voteInfluenceBalance[msg.sender] + 1;
         if (_wasGoodIdentifier) {
             voting[_tokenId].good += voteInfluence;
             allVotes[msg.sender].good += voteInfluence;
@@ -375,23 +308,24 @@ abstract contract Queue is ERC721 {
         }
         voting[_tokenId].hasVoted[msg.sender] = true;
         emit VoteCasted(_tokenId, _wasGoodIdentifier, msg.sender, voteInfluence);
-        releasePeriodInfo[voting[_tokenId].tokensReleasePeriod].numVotesCastedThisPeriod[msg.sender] += voteInfluence;
-        releasePeriodInfo[voting[_tokenId].tokensReleasePeriod].totalVotesCasted += voteInfluence; 
+        releasePeriodInfo[tokenDetails[_tokenId].releasePeriod].numVotesCastedThisPeriod[msg.sender] += voteInfluence;
+        releasePeriodInfo[tokenDetails[_tokenId].releasePeriod].totalVotesCasted += voteInfluence; 
     }
 
     function upgradeToVotingToken(uint256 _tokenId) public {
-        require(voting[_tokenId].endTimeStamp > 0, "Voting has not started on this token");
-        require(block.timestamp > voting[_tokenId].endTimeStamp, "Voting period is still in progress");
+        require(_exists(_tokenId), "Token does not exist");
+        uint256 releasePeriod = tokenDetails[_tokenId].releasePeriod;
+        require(releasePeriodInfo[releasePeriod].endTimeStamp > 0 && block.timestamp > releasePeriodInfo[releasePeriod].endTimeStamp, "Ensure that voting period of last video is over");
         require(voting[_tokenId].good > voting[_tokenId].bad, "Your token was not good"); 
-        require(activeReleasePeriodCounter.current() > voting[_tokenId].tokensReleasePeriod);
-        voteInfluenceBalance[ownerOf(_tokenId)] += 1;
+        voteInfluenceBalance[ownerOf(_tokenId)] += influencePerVotingToken;
     }
 
     //-----------------------RECEIVE PAYOUT FUNCTIONS-------------------------
 
     function receivePeriodFunds(uint256 _releasePeriod) public {
-        require(activeReleasePeriodCounter.current() > _releasePeriod, "This period has not concluded"); 
-        require(block.timestamp > releasePeriodInfo[_releasePeriod].startTimestamp + votePeriodLength, "Wait for votes from the previous period to finish");
+        // FIGURE IT OUT
+        // require(activeReleasePeriodCounter.current() > _releasePeriod, "This period has not concluded"); 
+        require(releasePeriodInfo[_releasePeriod].endTimeStamp > 0 && block.timestamp > releasePeriodInfo[_releasePeriod].endTimeStamp, "This period has not concluded"); 
         require(releasePeriodInfo[_releasePeriod].hasReceivedShare[msg.sender] == false, "You have already received this periods rewards");
         require(releasePeriodInfo[_releasePeriod].numVotesCastedThisPeriod[msg.sender] > 0, "You didnt vote on any tokens this period");
         uint256 rewardsUnit = releasePeriodInfo[_releasePeriod].rewards / releasePeriodInfo[_releasePeriod].totalVotesCasted;
@@ -424,6 +358,12 @@ abstract contract Queue is ERC721 {
         uint256 multiplier = tempMultiplier > 1e18 ? 1e18 : tempMultiplier;
     
         return multiplier;
+    }
+
+    function moveEmptyVotePeriodFundsToDonateFunds(uint256 _releasePeriod) public {
+        require(releasePeriodInfo[_releasePeriod].endTimeStamp > 0 && block.timestamp > releasePeriodInfo[_releasePeriod].endTimeStamp, "This period has not concluded");
+        require(releasePeriodInfo[_releasePeriod].totalVotesCasted == 0, "There were more than 0 votes this period");
+        donationAddressFunds += releasePeriodInfo[_releasePeriod].rewards;
     }
 
     function receiveDonatedFunds() public {
