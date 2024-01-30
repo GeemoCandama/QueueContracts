@@ -123,7 +123,6 @@ abstract contract QueueV2 is ERC721 {
      * @param _votePeriodLength The amount of time that a vote period is active.
      * @param _releasePeriodLength The amount of time between release periods.
      * @param _voteFundDonationAddress address to donate to.
-     * @param _initialVoteInfluence The amount of votes that the initialVoter will have when deployed.
      * the amount of ether availabe for voting rewards. I'd recommend setting it somewhere between 1/10 and 1/100 of the cost to
      * queue the shortest token possible. Note that the actual gas cost of the dequeue function is not influenced by these parameters.
      * You can think of setting this value at 1/100 of the shortest token possible as 1% of enqueue fees going to gas refunds.
@@ -137,12 +136,8 @@ abstract contract QueueV2 is ERC721 {
         uint256 _votePeriodLength,
         uint256 _releasePeriodLength,
         address _voteFundDonationAddress,
-        address _initialVoter,
-        uint256 _initialVoteInfluence,
         uint256 _influencePerVotingToken
     ) ERC721(_name, _symbol) {
-        require(_initialVoteInfluence > 0, "The initial vote influence of the initialVoter must be positive");
-        require(_initialVoter != address(0), "initialVoter address cannot be 0");
         queueURI = _queueURI;  
         minTimeActive = _minTimeActive;
         costPerSecond = _costPerSecond;
@@ -152,7 +147,6 @@ abstract contract QueueV2 is ERC721 {
         releasePeriodLength = _releasePeriodLength;
 
         voteFundDonationAddress = _voteFundDonationAddress;
-        voteInfluenceBalance[_initialVoter] = _initialVoteInfluence;
     }
 
     modifier validIdentifier(string memory _identifier) virtual;
@@ -243,6 +237,7 @@ abstract contract QueueV2 is ERC721 {
 
     function buyListedQueueToken(uint256 _tokenId) public payable {
         require(block.timestamp < tokenDetails[_tokenId].startTime, "Cannot transfer token once active");
+        require(ownerOf(_tokenId) != msg.sender, "You already own this");
         Listing memory listing = listings[_tokenId];
         require(listing.isForSale == true, "This token is not for sale");
         require(msg.value >= listing.price, "Insufficient payment!");
@@ -323,7 +318,6 @@ abstract contract QueueV2 is ERC721 {
     //-----------------------RECEIVE PAYOUT FUNCTIONS-------------------------
 
     function receivePeriodFunds(uint256 _releasePeriod) public {
-        // FIGURE IT OUT
         // require(activeReleasePeriodCounter.current() > _releasePeriod, "This period has not concluded"); 
         require(releasePeriodInfo[_releasePeriod].endTimeStamp > 0 && block.timestamp > releasePeriodInfo[_releasePeriod].endTimeStamp, "This period has not concluded"); 
         require(releasePeriodInfo[_releasePeriod].hasReceivedShare[msg.sender] == false, "You have already received this periods rewards");

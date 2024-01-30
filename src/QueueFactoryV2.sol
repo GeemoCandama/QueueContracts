@@ -17,8 +17,6 @@ contract QueueFactory {
         uint256 _votePeriodLength,
         uint256 _releasePeriodLength,
         address _voteFundDonationAddress,
-        address _initialVoter,
-        uint256 _initialVoteInfluence,
         uint256 _influencePerToken
     );
 
@@ -31,8 +29,6 @@ contract QueueFactory {
         uint256 _votePeriodLength,
         uint256 _releasePeriodLength,
         address _voteFundDonationAddress,
-        address _initialVoter,
-        uint256 _initialVoteInfluence,
         uint256 _influencePerToken
     ) public {
         YoutubeQueueNew queue = new YoutubeQueueNew (
@@ -44,8 +40,6 @@ contract QueueFactory {
             _votePeriodLength,
             _releasePeriodLength,
             _voteFundDonationAddress,
-            _initialVoter,
-            _initialVoteInfluence,
             _influencePerToken
         );
         emit QueueCreated(
@@ -59,8 +53,6 @@ contract QueueFactory {
             _votePeriodLength,
             _releasePeriodLength,
             _voteFundDonationAddress,
-            _initialVoter,
-            _initialVoteInfluence,
             _influencePerToken
         );
         queueIdCounter.increment();
